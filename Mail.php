@@ -10,6 +10,9 @@
  * $mail->setServer("XXXXX", "XXXXX@XXXXX", "XXXXX"); 设置smtp服务器
  * $mail->setFrom("XXXXX"); 设置发件人
  * $mail->setReceiver("XXXXX"); 设置收件人
+ * $mail->setReceiver(["XXXXX","XXXXX"]); 设置收件人,支持多个收件人
+ * $mail->setCc(["XXXXX","XXXXX"]); 设置抄送
+ * $mail->setBcc(["XXXXX","XXXXX"]); 设置密送
  * $mail->setMailInfo("test", "test"); 设置邮件主题、内容
  * $mail->sendMail(); 发送
  */
@@ -36,17 +39,33 @@ class Mail
      */
     protected $from;
     /**
-     * @var string 收件人
+     * @var array 收件人
      */
-    protected $to;
+    protected $to = [];
+    /**
+     * @var array 抄送
+     */
+    protected $cc = [];
+    /**
+     * @var array 密送
+     */
+    protected $bcc = [];
     /**
      * @var string 主题
      */
     protected $subject;
     /**
+     * @var array 邮件头部
+     */
+    protected $headers = [];
+    /**
      * @var string 邮件正文
      */
     protected $body;
+    /**
+     * @var boolean 是否为html
+     */
+    protected $isHtml = false;
     /**
      * @var reource socket资源
      */
@@ -74,7 +93,7 @@ class Mail
         if (!empty($password)) {
             $this->password = $password;
         }
-        return true;
+        return $this;
     }
 
     /**
@@ -85,18 +104,58 @@ class Mail
     public function setFrom($from)
     {
         $this->from = $from;
-        return true;
+        return $this;
     }
 
     /**
      * 设置收件人
-     * @param string $to 收件人地址
+     * @param string|array $to 收件人地址
      * @return bool
      */
     public function setReceiver($to)
     {
-        $this->to = $to;
-        return true;
+        if(is_array($to)) {
+            foreach ($to as $val) {
+                $this->to[] = $val;
+            }
+        } else {
+            $this->to[] = $to;
+        }
+        return $this;
+    }
+
+    /**
+     * 设置抄送
+     * @param $cc
+     * @return $this
+     */
+    public function setCc($cc)
+    {
+        if(is_array($cc)) {
+            foreach ($cc as $val) {
+                $this->cc[] = $val;
+            }
+        } else {
+            $this->cc[] = $cc;
+        }
+        return $this;
+    }
+
+    /**
+     * 设置密送
+     * @param $bcc
+     * @return $this
+     */
+    public function setBcc($bcc)
+    {
+        if(is_array($bcc)) {
+            foreach ($bcc as $val) {
+                $this->bcc[] = $val;
+            }
+        } else {
+            $this->bcc[] = $bcc;
+        }
+        return $this;
     }
 
     /**
@@ -105,11 +164,12 @@ class Mail
      * @param $body 邮件内容
      * @return bool
      */
-    public function setMailInfo($subject, $body)
+    public function setMailInfo($subject, $body, $isHtml = false)
     {
         $this->subject = $subject;
         $this->body = $body;
-        return true;
+        $this->isHtml = $isHtml;
+        return $this;
     }
 
     /**
@@ -118,6 +178,7 @@ class Mail
      */
     public function sendMail()
     {
+        $this->buildHeaders();
         $command = $this->getCommand();
         $this->socket();
         foreach ($command as $value) {
@@ -142,27 +203,68 @@ class Mail
     }
 
     /**
+     * 设置头部信息
+     * @param $header
+     * @param $value
+     */
+    protected function setHeader($header, $value)
+    {
+        $this->headers[$header] = $value;
+    }
+
+    protected function buildHeaders()
+    {
+        $this->setHeader('Mime-Version', '1.0');
+        if($this->isHtml) {
+            $this->setHeader('Content-Type', 'text/html; charset="utf-8"');
+        } else {
+            $this->setHeader('Content-Type', 'text/plain; charset="utf-8"');
+        }
+        $this->setHeader('Content-Transfer-Encoding', '7bit');
+    }
+    /**
      * 返回mail命令
      * @return array
      */
     protected function getCommand()
     {
-        $mail = "FROM:{$this->username}<{$this->from}>\r\n";
-        $mail .= "TO:<" . $this->to . ">\r\n";
+        $mail = '';
+        foreach ($this->headers as $key => $val) {
+            $mail .= "$key:$val\r\n";
+        }
+        $mail .= "FROM:{$this->from}\r\n";
+
+        if(!empty($this->to)) {
+            $mail .= "TO:" . implode(", ", $this->to)."\r\n";
+        }
+        if(!empty($this->cc)) {
+            $mail .= "Cc:" . implode(", ", $this->cc)."\r\n";
+        }
+        if(!empty($this->bcc)) {
+            $mail .= "Bcc:" . implode(", ", $this->bcc)."\r\n";
+        }
         $mail .= "Subject:" . $this->subject . "\r\n\r\n";
         $mail .= $this->body . "\r\n.\r\n";
 
-        $command = array(
-            array("HELO sendmail\r\n", 250),
-            array("AUTH LOGIN\r\n", 334),
-            array(base64_encode($this->username) . "\r\n", 334),
-            array(base64_encode($this->password) . "\r\n", 235),
-            array("MAIL FROM:<" . $this->from . ">\r\n", 250),
-            array("RCPT TO:<" . $this->to . ">\r\n", 250),
-            array("DATA\r\n", 354),
-            array($mail, 250),
-            array("QUIT\r\n", 221)
-        );
+        $command = [];
+        $command[] = array("HELO sendmail\r\n", 250);
+        $command[] = array("AUTH LOGIN\r\n", 334);
+        $command[] = array(base64_encode($this->username) . "\r\n", 334);
+        $command[] = array(base64_encode($this->password) . "\r\n", 235);
+        $command[] = array("MAIL FROM:<" . $this->from . ">\r\n", 250);
+        foreach ($this->to as $to) {
+            $command[] = array("RCPT TO:<" . $to . ">\r\n", 250);
+        }
+        foreach ($this->cc as $cc) {
+            $command[] = array("RCPT TO:<" . $cc . ">\r\n", 250);
+        }
+        foreach ($this->bcc as $bcc) {
+            $command[] = array("RCPT TO:<" . $bcc . ">\r\n", 250);
+        }
+        $command[] = array("DATA\r\n", 354);
+        $command[] = array($mail, 250);
+        $command[] = array("QUIT\r\n", 221);
+
         return $command;
     }
 
@@ -175,11 +277,13 @@ class Mail
      */
     protected function sendCommand($command, $code)
     {
+        //echo 'Send command:' . $command . ',expected code:' . $code . '<br />';
         //发送命令给服务器
         try {
             if (socket_write($this->socket, $command, strlen($command))) {
                 //读取服务器返回
                 $data = trim(socket_read($this->socket, 1024));
+                //echo 'response:' . $data . '<br /><br />';
                 if ($data) {
                     $pattern = "/^" . $code . "/";
                     if (preg_match($pattern, $data)) {
@@ -242,8 +346,9 @@ class Mail
 }
 /**************************** Test ***********************************/
 /*$mail = new Mail();
-$mail->setServer("smtp.163.com", "XXXXX", "XXXXX");
+$mail->setServer("smtp.xxx.com", "XXXXX", "XXXXX");
 $mail->setFrom("XXXXX@XXXXX");
 $mail->setReceiver("XXXXX@XXXXX");
+$mail->setCc("XXXXX@XXXXX");
 $mail->setMailInfo("test", "test");
 $mail->sendMail();*/
